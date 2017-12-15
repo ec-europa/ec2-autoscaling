@@ -165,11 +165,14 @@ def run():
         return {}
 
     message = json.loads(sns['Message'])
+
+    log.info(message)
+
     instance_id = str(message['EC2InstanceId'])
 
     if 'launch' in sns['Subject']:
         credentials = _get_credentials()
-
+        prefix = ""
         conn = _connect_ec2(credentials)
 
         if conn:
@@ -181,7 +184,7 @@ def run():
             else:
                 log.error("No prefix tag found on instance !")
 
-	instance_name = str(prefix + instance_id)
+	    instance_name = str(prefix + instance_id)
         instance_image_id = instance.image_id
 
         log.debug("Start logging Launch new instance !! " + instance_name)
@@ -189,43 +192,48 @@ def run():
         availability_zone = str(message['Details']['Availability Zone'])
 
         vm_ = __opts__.get('ec2.autoscale', {})
+        log.debug("read default part of autoscaling string !! " + str(vm_))
 
         vm_['reactor'] = True
         vm_['instances'] = instance_name
-        vm_['kwarg']['instance_id'] = instance_id
-	vm_['kwarg']['image'] = str(instance_image_id)
+        vm_['instance_id'] = instance_id
+	    vm_['image'] = str(instance_image_id)
 
         minion = {}
         grains = {}
-        kwarg = {}
+        tags = {}
+        roles = {}
+
         grains.update({'availability_zone': availability_zone})
 
-        if 'grains' in vm_['kwarg']['minion']:
-            for key, value in vm_['kwarg']['minion']['grains'].iteritems():
+        if 'grains' in vm_['minion']:
+            for key, value in vm_['minion']['grains'].iteritems():
 		grains.update({key: value})
 
-        if 'minion' in vm_['kwarg']:
-            for key, value in vm_['kwarg']['minion'].iteritems():
+        for key, value in instance.tags.iteritems():
+            tags.update({key: value})
+
+        grains.update({'Tags': tags})
+
+        if 'Roles' in instance.tags:
+            grains.update({'Roles': instance.tags['Roles'].split(',')})
+
+        if 'minion' in vm_:
+            for key, value in vm_['minion'].iteritems():
                 if not key.startswith('grain'):
                     minion.update({key: value})
 
-        if 'kwarg' in vm_:
-            for key, value in vm_['kwarg'].iteritems():
-                if not key.startswith('minion'):
-                    kwarg.update({key: value})
-
         minion.update({'grains': grains})
-        kwarg.update({'minion': minion})
 
         vm_list = []
 
         for key, value in vm_.iteritems():
-            if not key.startswith('__') and not key.startswith('kwarg'):
+            if not key.startswith('__') and not key.startswith('minion'):
                 vm_list.append({key: value})
 
-        vm_list.append({'kwarg': kwarg})
+        vm_list.append({'minion': minion})
 
-        log.info(vm_list)
+        #log.info(vm_list)
 
         # Fire off an event to wait for the machine
         ret = {
@@ -233,8 +241,6 @@ def run():
                 'runner.cloud.create': vm_list
             }
         }
-
-        log.info(ret)
     elif 'termination' in sns['Subject']:
         credentials = _get_credentials()
 
@@ -248,7 +254,7 @@ def run():
             if 'Name' in instance.tags:
                 Name = str(instance.tags['Name'])
 
-#        log.debug("Start logging Terminate new instance !! " + Name)
+        log.debug("Start logging Terminate new instance !! " + Name)
 
         ret = {
             'ec2_autoscale_termination': {
@@ -257,5 +263,7 @@ def run():
                 ]
             }
         }
+
+    log.info(ret)
 
     return ret
